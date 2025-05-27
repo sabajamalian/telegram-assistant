@@ -1,10 +1,12 @@
 import os
 import logging
 import json
+import tempfile
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from voice_processor import VoiceProcessor
 
 # Load environment variables
 load_dotenv()
@@ -18,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Get the token from environment variable
 TOKEN = os.getenv('TELEGRAM_TOKEN')
+
+# Initialize voice processor
+voice_processor = VoiceProcessor()
 
 def log_message_metadata(update: Update):
     """Log all metadata from the incoming message."""
@@ -78,6 +83,39 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("I can only echo text messages!")
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle voice messages by transcribing, translating, and executing tasks."""
+    log_message_metadata(update)
+    
+    try:
+        # Get the voice file
+        voice = await update.message.voice.get_file()
+        
+        # Create a temporary file to store the voice message
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.ogg') as temp_file:
+            # Download the voice file
+            await voice.download_to_drive(temp_file.name)
+            
+            # Process the voice file and execute the task
+            task_type, task_response = await voice_processor.process_voice(temp_file.name)
+            
+            # Send the task response back to the user
+            if task_response["status"] == "success":
+                await update.message.reply_text(
+                    f"Task: {task_type}\n"
+                    f"Status: {task_response['message']}\n"
+                    f"Content: {task_response['content']}"
+                )
+            else:
+                await update.message.reply_text(
+                    f"Error: {task_response['message']}\n"
+                    f"Please try again with a clearer instruction."
+                )
+            
+    except Exception as e:
+        logger.error(f"Error processing voice message: {str(e)}")
+        await update.message.reply_text("Sorry, I couldn't process your voice message. Please try again.")
+
 def main():
     """Start the bot."""
     # Create the Application
@@ -86,6 +124,7 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
     # Start the Bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
